@@ -1,0 +1,13 @@
+# One phrase per line. These help the recognizer correctly catch words
+# it might otherwise mis-hear (names, terms, mantras, etc).
+# Lines starting with # are ignored. Add your own below.
+Sadhsangat
+Satguru
+Gurbani
+Nirankar
+Sadh Sangat ji Pyar se kehna Dhan Nirankar ji
+Satsang
+Bhawan
+Sampuran Avtar Bani
+Simran
+Ardas
