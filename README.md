@@ -122,6 +122,87 @@ transcript file, **and** your Google Doc — all in real time, each with a blank
 Google Docs. Never share them or commit them to a public repo (they're already excluded
 via `.gitignore`).
 
+## Running it as a website instead of a terminal script
+
+This project now includes a web version: `server.py` (backend) + `static/index.html`
+(a page that captures your mic in the browser and shows live English text).
+
+### Try it locally first
+
+```bash
+py -3.9 -m pip install -r requirements.txt
+py -3.9 -m uvicorn server:app --reload --port 8000
+```
+
+Then open **http://localhost:8000** in your browser, click **Start Listening**, and
+allow microphone access when your browser asks. You should see live English text
+appear, same as the terminal version.
+
+## Hosting on the web (Render)
+
+Render will run `server.py` continuously so you never need to open a terminal or
+keep your laptop's Python running — just open a browser tab from anywhere.
+
+### 1. Push this project to GitHub
+If you haven't already:
+```bash
+git init
+git add .
+git commit -m "initial version"
+```
+Create a new repo on https://github.com/new, then follow GitHub's instructions to push
+(`git remote add origin ...`, `git push -u origin main`).
+
+**Important:** make sure `.env`, `credentials.json`, and `token.json` are NOT in this repo
+(the included `.gitignore` already excludes them — just don't force-add them).
+
+### 2. Create the Render service
+1. Go to https://render.com and sign up (free, can use your Google/GitHub account).
+2. Click **New +** -> **Web Service**.
+3. Connect your GitHub account and select this repo.
+4. Fill in:
+   - **Name**: anything (e.g. `spiritual-translator`)
+   - **Region**: closest to you
+   - **Runtime**: **Python 3**
+   - **Build Command**: `pip install -r requirements.txt`
+   - **Start Command**: `uvicorn server:app --host 0.0.0.0 --port $PORT`
+   - **Instance Type**: **Free** to test, or **Starter** (~$7/month) so it doesn't
+     go to sleep between uses — free tier spins down after inactivity and takes
+     ~30-60 seconds to wake up on the next visit, which isn't great mid-talk.
+
+### 3. Add your secrets
+Still on Render, before/after the first deploy, go to your service -> **Environment**:
+
+- Add environment variables:
+  - `SPEECH_KEY` = your Azure key
+  - `SPEECH_REGION` = your Azure region
+  - `GOOGLE_DOC_ID` = your Google Doc ID (only if using Google Docs sync)
+  - `GOOGLE_HEADLESS` = `true` (only if using Google Docs sync — this tells the
+    server not to try opening a browser login, since there isn't one on a server)
+  - `GOOGLE_TOKEN_PATH` = `/etc/secrets/token.json` (only if using Google Docs sync)
+
+- Under **Secret Files** (same Environment page), add a secret file:
+  - Filename: `token.json`
+  - Contents: paste the entire contents of your local `token.json` (open it with
+    Notepad and copy everything). This is the file that was created the first time
+    you approved Google access locally — reusing it means the server never needs
+    an interactive login.
+
+### 4. Deploy
+Click **Create Web Service** (or **Manual Deploy** if it already exists). Render will
+install dependencies and start the server. Once it says **Live**, open the URL it
+gives you (something like `https://spiritual-translator.onrender.com`) on your phone
+or laptop browser, click **Start Listening**, and you're live — no terminal needed.
+
+### Notes
+- Every time you open the page and click Start, that's a fresh session — like
+  restarting `main.py` each time.
+- If you didn't set up Google Docs sync, just skip the `GOOGLE_*` variables entirely —
+  the site will still work, showing live text and saving transcripts on the server.
+- **Costs**: Render's Starter tier is usually enough for a single continuous live
+  session (~$7/month); Azure speech translation billing is unaffected by hosting —
+  it's still billed per audio hour as before.
+
 ## Customizing recognition for your vocabulary
 
 

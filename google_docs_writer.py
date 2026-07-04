@@ -21,8 +21,8 @@ from googleapiclient.discovery import build
 SCOPES = ["https://www.googleapis.com/auth/documents"]
 
 BASE_DIR = os.path.dirname(__file__)
-CREDENTIALS_PATH = os.path.join(BASE_DIR, "credentials.json")
-TOKEN_PATH = os.path.join(BASE_DIR, "token.json")
+CREDENTIALS_PATH = os.environ.get("GOOGLE_CREDENTIALS_PATH", os.path.join(BASE_DIR, "credentials.json"))
+TOKEN_PATH = os.environ.get("GOOGLE_TOKEN_PATH", os.path.join(BASE_DIR, "token.json"))
 
 
 class GoogleDocsWriter:
@@ -42,6 +42,12 @@ class GoogleDocsWriter:
         if not creds or not creds.valid:
             if creds and creds.expired and creds.refresh_token:
                 creds.refresh(Request())
+            elif os.environ.get("GOOGLE_HEADLESS", "").lower() == "true":
+                raise RuntimeError(
+                    "No valid Google token found for headless/server mode. "
+                    "Run main.py or server.py locally once first to generate token.json via "
+                    "the browser login, then upload that token.json to the server."
+                )
             else:
                 if not os.path.exists(CREDENTIALS_PATH):
                     raise FileNotFoundError(

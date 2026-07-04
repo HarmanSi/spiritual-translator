@@ -1,0 +1,158 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spiritual Talk Translator</title>
+<style>
+  body {
+    font-family: -apple-system, Segoe UI, Roboto, sans-serif;
+    background: #111318;
+    color: #eee;
+    margin: 0;
+    padding: 24px;
+    max-width: 720px;
+    margin-inline: auto;
+  }
+  h1 { font-size: 1.4rem; margin-bottom: 4px; }
+  p.subtitle { color: #9aa0aa; margin-top: 0; }
+  .controls { margin: 20px 0; }
+  button {
+    font-size: 1rem;
+    padding: 12px 22px;
+    border-radius: 8px;
+    border: none;
+    cursor: pointer;
+    margin-right: 10px;
+  }
+  #startBtn { background: #3d7bff; color: white; }
+  #stopBtn { background: #444; color: white; }
+  button:disabled { opacity: 0.4; cursor: not-allowed; }
+  #status { margin-left: 8px; color: #9aa0aa; }
+  #interim {
+    min-height: 1.4em;
+    color: #9aa0aa;
+    font-style: italic;
+    margin-top: 16px;
+  }
+  #transcript {
+    margin-top: 12px;
+    background: #1a1d24;
+    border-radius: 10px;
+    padding: 16px;
+    height: 50vh;
+    overflow-y: auto;
+    line-height: 1.6;
+  }
+  #transcript p { margin: 0 0 14px 0; }
+</style>
+</head>
+<body>
+  <h1>Spiritual Talk Translator</h1>
+  <p class="subtitle">Listens in Hindi / Punjabi / English and shows English text live.</p>
+
+  <div class="controls">
+    <button id="startBtn">Start Listening</button>
+    <button id="stopBtn" disabled>Stop</button>
+    <span id="status"></span>
+  </div>
+
+  <div id="interim"></div>
+  <div id="transcript"></div>
+
+<script>
+let audioContext, processor, input, globalStream, socket;
+
+function floatTo16BitPCM(input) {
+  const output = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    let s = Math.max(-1, Math.min(1, input[i]));
+    output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  return output;
+}
+
+function downsampleBuffer(buffer, sampleRate, outSampleRate) {
+  if (outSampleRate === sampleRate) return buffer;
+  const ratio = sampleRate / outSampleRate;
+  const newLength = Math.round(buffer.length / ratio);
+  const result = new Float32Array(newLength);
+  let offsetResult = 0, offsetBuffer = 0;
+  while (offsetResult < result.length) {
+    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+    let accum = 0, count = 0;
+    for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+      accum += buffer[i];
+      count++;
+    }
+    result[offsetResult] = count > 0 ? accum / count : 0;
+    offsetResult++;
+    offsetBuffer = nextOffsetBuffer;
+  }
+  return result;
+}
+
+async function start() {
+  document.getElementById('status').innerText = 'Connecting...';
+
+  globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  input = audioContext.createMediaStreamSource(globalStream);
+  processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+  const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+  socket = new WebSocket(`${wsProtocol}://${location.host}/ws`);
+  socket.binaryType = 'arraybuffer';
+
+  socket.onopen = () => {
+    document.getElementById('status').innerText = 'Listening...';
+    processor.onaudioprocess = (e) => {
+      const inputData = e.inputBuffer.getChannelData(0);
+      const downsampled = downsampleBuffer(inputData, audioContext.sampleRate, 16000);
+      const pcm16 = floatTo16BitPCM(downsampled);
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(pcm16.buffer);
+      }
+    };
+    input.connect(processor);
+    processor.connect(audioContext.destination);
+  };
+
+  socket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    const interimEl = document.getElementById('interim');
+    const transcriptEl = document.getElementById('transcript');
+    if (data.type === 'interim') {
+      interimEl.innerText = '... ' + data.text;
+    } else if (data.type === 'final') {
+      interimEl.innerText = '';
+      const p = document.createElement('p');
+      p.innerText = data.text;
+      transcriptEl.appendChild(p);
+      transcriptEl.scrollTop = transcriptEl.scrollHeight;
+    }
+  };
+
+  socket.onclose = () => {
+    document.getElementById('status').innerText = 'Stopped.';
+  };
+
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+}
+
+function stop() {
+  if (processor) processor.disconnect();
+  if (input) input.disconnect();
+  if (globalStream) globalStream.getTracks().forEach(t => t.stop());
+  if (socket) socket.close();
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  document.getElementById('status').innerText = 'Stopped.';
+}
+
+document.getElementById('startBtn').addEventListener('click', start);
+document.getElementById('stopBtn').addEventListener('click', stop);
+</script>
+</body>
+</html>
