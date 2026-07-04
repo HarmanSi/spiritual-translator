@@ -1,0 +1,314 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Spiritual Talk Translator</title>
+<style>
+  :root {
+    --bg: #FAF6EF;
+    --panel: #F2EBDC;
+    --blue: #2F5AA8;
+    --blue-dark: #1F3F7A;
+    --ink: #2B2620;
+    --muted: #8A7F6D;
+  }
+
+  * { box-sizing: border-box; }
+
+  body {
+    margin: 0;
+    min-height: 100vh;
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    color: var(--ink);
+    background: var(--bg);
+    padding: 40px 20px 60px;
+  }
+
+  .page {
+    max-width: 640px;
+    margin: 0 auto;
+  }
+
+  header {
+    text-align: center;
+    margin-bottom: 28px;
+  }
+
+  h1 {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-weight: 600;
+    font-size: 1.6rem;
+    letter-spacing: -0.01em;
+    margin: 0 0 6px;
+    color: var(--ink);
+  }
+
+  .subtitle {
+    color: var(--muted);
+    font-size: 0.95rem;
+    margin: 0;
+  }
+
+  .divider {
+    width: 64px;
+    height: 2px;
+    background: var(--blue);
+    margin: 22px auto;
+    border-radius: 2px;
+    opacity: 0.5;
+  }
+
+  .controls {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 12px;
+    margin-bottom: 8px;
+  }
+
+  button {
+    font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    font-size: 0.95rem;
+    font-weight: 500;
+    padding: 13px 26px;
+    border-radius: 999px;
+    border: 1px solid transparent;
+    cursor: pointer;
+    transition: transform 0.15s ease, box-shadow 0.15s ease, opacity 0.15s ease;
+  }
+
+  button:active { transform: scale(0.97); }
+
+  #startBtn {
+    background: var(--blue);
+    color: #FFFFFF;
+    box-shadow: 0 4px 14px rgba(47,90,168,0.25);
+  }
+
+  #startBtn:hover:not(:disabled) { background: var(--blue-dark); }
+
+  #stopBtn {
+    background: transparent;
+    color: var(--muted);
+    border-color: rgba(107,122,153,0.35);
+  }
+
+  button:disabled {
+    opacity: 0.35;
+    cursor: not-allowed;
+    box-shadow: none;
+  }
+
+  button:focus-visible {
+    outline: 2px solid var(--blue);
+    outline-offset: 2px;
+  }
+
+  #status {
+    text-align: center;
+    color: var(--muted);
+    font-size: 0.85rem;
+    letter-spacing: 0.02em;
+    margin-top: 14px;
+    min-height: 1.2em;
+  }
+
+  #status.live { color: var(--blue); }
+
+  #interim {
+    min-height: 1.4em;
+    color: var(--muted);
+    font-style: italic;
+    font-size: 0.95rem;
+    margin: 22px 4px 10px;
+  }
+
+  #transcript {
+    background: var(--panel);
+    border: 1px solid rgba(47,90,168,0.14);
+    border-radius: 14px;
+    padding: 8px 20px;
+    height: 48vh;
+    overflow-y: auto;
+  }
+
+  #transcript:empty::before {
+    content: "Your live translation will appear here once you start listening.";
+    display: block;
+    color: var(--muted);
+    font-style: italic;
+    padding: 26px 4px;
+    font-size: 0.9rem;
+  }
+
+  .entry {
+    border-left: 2px solid var(--blue);
+    padding: 12px 0 12px 16px;
+    margin: 14px 0;
+  }
+
+  .entry .time {
+    display: block;
+    color: var(--blue);
+    font-size: 0.72rem;
+    letter-spacing: 0.06em;
+    margin-bottom: 4px;
+    font-variant-numeric: tabular-nums;
+  }
+
+  .entry .text {
+    color: var(--ink);
+    font-size: 1rem;
+    line-height: 1.55;
+  }
+
+  #transcript::-webkit-scrollbar { width: 8px; }
+  #transcript::-webkit-scrollbar-thumb {
+    background: rgba(47,90,168,0.22);
+    border-radius: 8px;
+  }
+
+  @media (prefers-reduced-motion: reduce) {
+    .flame path { animation: none; }
+  }
+</style>
+</head>
+<body>
+<div class="page">
+  <header>
+    <h1>Spiritual Talk Translator</h1>
+    <p class="subtitle">Hindi &middot; Punjabi &middot; English — spoken live, shown in English</p>
+  </header>
+
+  <div class="divider"></div>
+
+  <div class="controls">
+    <button id="startBtn">Start Listening</button>
+    <button id="stopBtn" disabled>Stop</button>
+  </div>
+  <div id="status"></div>
+
+  <div id="interim"></div>
+  <div id="transcript"></div>
+</div>
+
+<script>
+let audioContext, processor, input, globalStream, socket;
+
+function floatTo16BitPCM(input) {
+  const output = new Int16Array(input.length);
+  for (let i = 0; i < input.length; i++) {
+    let s = Math.max(-1, Math.min(1, input[i]));
+    output[i] = s < 0 ? s * 0x8000 : s * 0x7FFF;
+  }
+  return output;
+}
+
+function downsampleBuffer(buffer, sampleRate, outSampleRate) {
+  if (outSampleRate === sampleRate) return buffer;
+  const ratio = sampleRate / outSampleRate;
+  const newLength = Math.round(buffer.length / ratio);
+  const result = new Float32Array(newLength);
+  let offsetResult = 0, offsetBuffer = 0;
+  while (offsetResult < result.length) {
+    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+    let accum = 0, count = 0;
+    for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
+      accum += buffer[i];
+      count++;
+    }
+    result[offsetResult] = count > 0 ? accum / count : 0;
+    offsetResult++;
+    offsetBuffer = nextOffsetBuffer;
+  }
+  return result;
+}
+
+function renderFinalLine(rawText) {
+  // Server sends lines like "[14:32:07] translated text" - split for nicer display
+  const match = rawText.match(/^\[(\d{2}:\d{2}:\d{2})\]\s*(.*)$/);
+  const transcriptEl = document.getElementById('transcript');
+  const entry = document.createElement('div');
+  entry.className = 'entry';
+
+  if (match) {
+    const time = document.createElement('span');
+    time.className = 'time';
+    time.textContent = match[1];
+    const text = document.createElement('span');
+    text.className = 'text';
+    text.textContent = match[2];
+    entry.appendChild(time);
+    entry.appendChild(text);
+  } else {
+    entry.innerHTML = `<span class="text">${rawText}</span>`;
+  }
+
+  transcriptEl.appendChild(entry);
+  transcriptEl.scrollTop = transcriptEl.scrollHeight;
+}
+
+async function start() {
+  const statusEl = document.getElementById('status');
+  statusEl.textContent = 'Connecting...';
+  statusEl.className = '';
+
+  globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
+  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  input = audioContext.createMediaStreamSource(globalStream);
+  processor = audioContext.createScriptProcessor(4096, 1, 1);
+
+  const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+  socket = new WebSocket(`${wsProtocol}://${location.host}/ws`);
+  socket.binaryType = 'arraybuffer';
+
+  socket.onopen = () => {
+    statusEl.textContent = 'Listening';
+    statusEl.className = 'live';
+    processor.onaudioprocess = (e) => {
+      const inputData = e.inputBuffer.getChannelData(0);
+      const downsampled = downsampleBuffer(inputData, audioContext.sampleRate, 16000);
+      const pcm16 = floatTo16BitPCM(downsampled);
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(pcm16.buffer);
+      }
+    };
+    input.connect(processor);
+    processor.connect(audioContext.destination);
+  };
+
+  socket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    const interimEl = document.getElementById('interim');
+    if (data.type === 'interim') {
+      interimEl.textContent = '... ' + data.text;
+    } else if (data.type === 'final') {
+      interimEl.textContent = '';
+      renderFinalLine(data.text);
+    }
+  };
+
+  socket.onclose = () => {
+    statusEl.textContent = 'Stopped';
+    statusEl.className = '';
+  };
+
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+}
+
+function stop() {
+  if (processor) processor.disconnect();
+  if (input) input.disconnect();
+  if (globalStream) globalStream.getTracks().forEach(t => t.stop());
+  if (socket) socket.close();
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+}
+
+document.getElementById('startBtn').addEventListener('click', start);
+document.getElementById('stopBtn').addEventListener('click', stop);
+</script>
+</body>
+</html>
