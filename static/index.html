@@ -303,6 +303,7 @@ function stop() {
   document.getElementById('stopBtn').disabled = true;
   setStatus('Stopped', false);
 }
+function floatTo16BitPCM(input) {
   const output = new Int16Array(input.length);
   for (let i = 0; i < input.length; i++) {
     let s = Math.max(-1, Math.min(1, input[i]));
