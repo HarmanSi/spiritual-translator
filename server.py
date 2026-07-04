@@ -82,6 +82,19 @@ async def websocket_endpoint(websocket: WebSocket):
         auto_detect_source_language_config=auto_detect_config,
     )
 
+    # Boost recognition accuracy for spiritual/religious vocabulary (see phrases.txt)
+    phrases_file = os.path.join(os.path.dirname(__file__), "phrases.txt")
+    if os.path.exists(phrases_file):
+        try:
+            grammar = speechsdk.PhraseListGrammar.from_recognizer(recognizer)
+            with open(phrases_file, "r", encoding="utf-8") as f:
+                for line in f:
+                    phrase = line.strip()
+                    if phrase and not phrase.startswith("#"):
+                        grammar.addPhrase(phrase)
+        except Exception as e:
+            print(f"(Skipping custom vocabulary boost - not critical: {e})")
+
     google_docs_writer = None
     if GOOGLE_DOC_ID:
         from google_docs_writer import GoogleDocsWriter
