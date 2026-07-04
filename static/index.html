@@ -116,6 +116,23 @@
 
   #status.live { color: var(--blue); }
 
+  #levelMeter {
+    max-width: 220px;
+    height: 6px;
+    margin: 12px auto 0;
+    background: rgba(47,90,168,0.12);
+    border-radius: 4px;
+    overflow: hidden;
+  }
+
+  #levelBar {
+    height: 100%;
+    width: 0%;
+    background: var(--blue);
+    border-radius: 4px;
+    transition: width 0.08s linear;
+  }
+
   #interim {
     min-height: 1.4em;
     color: var(--muted);
@@ -188,6 +205,7 @@
     <button id="stopBtn" disabled>Stop</button>
   </div>
   <div id="status"></div>
+  <div id="levelMeter"><div id="levelBar"></div></div>
 
   <div id="interim"></div>
   <div id="transcript"></div>
@@ -195,8 +213,96 @@
 
 <script>
 let audioContext, processor, input, globalStream, socket;
+let isListening = false;
+let reconnectAttempts = 0;
+let reconnectTimer = null;
 
-function floatTo16BitPCM(input) {
+function setStatus(text, isLive) {
+  const statusEl = document.getElementById('status');
+  statusEl.textContent = text;
+  statusEl.className = isLive ? 'live' : '';
+}
+
+function connectSocket() {
+  const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
+  socket = new WebSocket(`${wsProtocol}://${location.host}/ws`);
+  socket.binaryType = 'arraybuffer';
+
+  socket.onopen = () => {
+    reconnectAttempts = 0;
+    setStatus('Listening', true);
+    processor.onaudioprocess = (e) => {
+      const inputData = e.inputBuffer.getChannelData(0);
+      document.getElementById('levelBar').style.width = computeLevel(inputData) + '%';
+      const downsampled = downsampleBuffer(inputData, audioContext.sampleRate, 16000);
+      const pcm16 = floatTo16BitPCM(downsampled);
+      if (socket.readyState === WebSocket.OPEN) {
+        socket.send(pcm16.buffer);
+      }
+    };
+  };
+
+  socket.onmessage = (event) => {
+    const data = JSON.parse(event.data);
+    const interimEl = document.getElementById('interim');
+    if (data.type === 'interim') {
+      interimEl.textContent = '... ' + data.text;
+    } else if (data.type === 'final') {
+      interimEl.textContent = '';
+      renderFinalLine(data.text);
+    }
+  };
+
+  socket.onclose = () => {
+    if (!isListening) {
+      setStatus('Stopped', false);
+      return;
+    }
+    // Unexpected drop (e.g. WiFi hiccup) - try to reconnect automatically
+    reconnectAttempts++;
+    const delaySeconds = Math.min(10, reconnectAttempts * 2);
+    setStatus(`Connection lost - reconnecting in ${delaySeconds}s...`, false);
+    reconnectTimer = setTimeout(() => {
+      if (isListening) connectSocket();
+    }, delaySeconds * 1000);
+  };
+}
+
+async function start() {
+  setStatus('Connecting...', false);
+
+  globalStream = await navigator.mediaDevices.getUserMedia({
+    audio: {
+      echoCancellation: true,
+      noiseSuppression: true,
+      autoGainControl: true
+    }
+  });
+  audioContext = new (window.AudioContext || window.webkitAudioContext)();
+  input = audioContext.createMediaStreamSource(globalStream);
+  processor = audioContext.createScriptProcessor(4096, 1, 1);
+  input.connect(processor);
+  processor.connect(audioContext.destination);
+
+  isListening = true;
+  connectSocket();
+
+  document.getElementById('startBtn').disabled = true;
+  document.getElementById('stopBtn').disabled = false;
+}
+
+function stop() {
+  isListening = false;
+  if (reconnectTimer) clearTimeout(reconnectTimer);
+  if (processor) processor.disconnect();
+  if (input) input.disconnect();
+  if (globalStream) globalStream.getTracks().forEach(t => t.stop());
+  if (socket) socket.close();
+  document.getElementById('levelBar').style.width = '0%';
+  document.getElementById('startBtn').disabled = false;
+  document.getElementById('stopBtn').disabled = true;
+  setStatus('Stopped', false);
+}
   const output = new Int16Array(input.length);
   for (let i = 0; i < input.length; i++) {
     let s = Math.max(-1, Math.min(1, input[i]));
@@ -206,23 +312,29 @@ function floatTo16BitPCM(input) {
 }
 
 function downsampleBuffer(buffer, sampleRate, outSampleRate) {
+  // Linear interpolation resampling - noticeably cleaner than block-averaging,
+  // preserves more of the speech signal that Azure needs for accuracy.
   if (outSampleRate === sampleRate) return buffer;
   const ratio = sampleRate / outSampleRate;
   const newLength = Math.round(buffer.length / ratio);
   const result = new Float32Array(newLength);
-  let offsetResult = 0, offsetBuffer = 0;
-  while (offsetResult < result.length) {
-    const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-    let accum = 0, count = 0;
-    for (let i = offsetBuffer; i < nextOffsetBuffer && i < buffer.length; i++) {
-      accum += buffer[i];
-      count++;
-    }
-    result[offsetResult] = count > 0 ? accum / count : 0;
-    offsetResult++;
-    offsetBuffer = nextOffsetBuffer;
+  for (let i = 0; i < newLength; i++) {
+    const srcPos = i * ratio;
+    const srcIndex = Math.floor(srcPos);
+    const frac = srcPos - srcIndex;
+    const s0 = buffer[srcIndex] || 0;
+    const s1 = buffer[srcIndex + 1] !== undefined ? buffer[srcIndex + 1] : s0;
+    result[i] = s0 + (s1 - s0) * frac;
   }
   return result;
+}
+
+function computeLevel(buffer) {
+  // RMS level for the mic meter, 0-100 scale
+  let sum = 0;
+  for (let i = 0; i < buffer.length; i++) sum += buffer[i] * buffer[i];
+  const rms = Math.sqrt(sum / buffer.length);
+  return Math.min(100, Math.round(rms * 400));
 }
 
 function renderFinalLine(rawText) {
@@ -247,64 +359,6 @@ function renderFinalLine(rawText) {
 
   transcriptEl.appendChild(entry);
   transcriptEl.scrollTop = transcriptEl.scrollHeight;
-}
-
-async function start() {
-  const statusEl = document.getElementById('status');
-  statusEl.textContent = 'Connecting...';
-  statusEl.className = '';
-
-  globalStream = await navigator.mediaDevices.getUserMedia({ audio: true });
-  audioContext = new (window.AudioContext || window.webkitAudioContext)();
-  input = audioContext.createMediaStreamSource(globalStream);
-  processor = audioContext.createScriptProcessor(4096, 1, 1);
-
-  const wsProtocol = location.protocol === 'https:' ? 'wss' : 'ws';
-  socket = new WebSocket(`${wsProtocol}://${location.host}/ws`);
-  socket.binaryType = 'arraybuffer';
-
-  socket.onopen = () => {
-    statusEl.textContent = 'Listening';
-    statusEl.className = 'live';
-    processor.onaudioprocess = (e) => {
-      const inputData = e.inputBuffer.getChannelData(0);
-      const downsampled = downsampleBuffer(inputData, audioContext.sampleRate, 16000);
-      const pcm16 = floatTo16BitPCM(downsampled);
-      if (socket.readyState === WebSocket.OPEN) {
-        socket.send(pcm16.buffer);
-      }
-    };
-    input.connect(processor);
-    processor.connect(audioContext.destination);
-  };
-
-  socket.onmessage = (event) => {
-    const data = JSON.parse(event.data);
-    const interimEl = document.getElementById('interim');
-    if (data.type === 'interim') {
-      interimEl.textContent = '... ' + data.text;
-    } else if (data.type === 'final') {
-      interimEl.textContent = '';
-      renderFinalLine(data.text);
-    }
-  };
-
-  socket.onclose = () => {
-    statusEl.textContent = 'Stopped';
-    statusEl.className = '';
-  };
-
-  document.getElementById('startBtn').disabled = true;
-  document.getElementById('stopBtn').disabled = false;
-}
-
-function stop() {
-  if (processor) processor.disconnect();
-  if (input) input.disconnect();
-  if (globalStream) globalStream.getTracks().forEach(t => t.stop());
-  if (socket) socket.close();
-  document.getElementById('startBtn').disabled = false;
-  document.getElementById('stopBtn').disabled = true;
 }
 
 document.getElementById('startBtn').addEventListener('click', start);
